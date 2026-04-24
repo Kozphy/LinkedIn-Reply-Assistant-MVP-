@@ -1,0 +1,270 @@
+{
+  "name": "LinkedIn Semi-Auto Reply Assistant",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "filters": {
+          "q": "from:(messages-noreply@linkedin.com OR invitations@linkedin.com OR notifications-noreply@linkedin.com) (subject:(message OR connect OR invitation) OR linkedin)"
+        }
+      },
+      "id": "gmail-trigger",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1,
+      "position": [
+        -980,
+        0
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_WITH_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{($json.from || '').toLowerCase().includes('linkedin.com') || ($json.subject || '').toLowerCase().includes('linkedin')}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-linkedin-notification",
+      "name": "IF: Is LinkedIn Notification",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "/**\n * Cleans text extracted from LinkedIn notification emails.\n *\n * @param {string} value - Raw text from the email body or subject.\n * @returns {string} Cleaned text with normalized whitespace.\n */\nfunction cleanText(value) {\n  if (!value) return \"\";\n\n  return String(value)\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, \" \")\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, \" \")\n    .replace(/<[^>]+>/g, \" \")\n    .replace(/&nbsp;/g, \" \")\n    .replace(/&amp;/g, \"&\")\n    .replace(/&lt;/g, \"<\")\n    .replace(/&gt;/g, \">\")\n    .replace(/&#39;/g, \"'\")\n    .replace(/&quot;/g, '\"')\n    .replace(/\\r/g, \"\\n\")\n    .replace(/\\n{3,}/g, \"\\n\\n\")\n    .replace(/[ \\t]{2,}/g, \" \")\n    .trim();\n}\n\n/**\n * Detects the LinkedIn event type from email subject and body.\n *\n * @param {string} subject - Email subject line.\n * @param {string} body - Plain text or cleaned HTML email body.\n * @returns {string} Event type: new_connection, new_message, or unknown.\n */\nfunction detectEventType(subject, body) {\n  const text = `${subject} ${body}`.toLowerCase();\n\n  if (\n    text.includes(\"wants to connect\") ||\n    text.includes(\"invitation\") ||\n    text.includes(\"accepted your invitation\") ||\n    text.includes(\"is now a connection\")\n  ) {\n    return \"new_connection\";\n  }\n\n  if (\n    text.includes(\"sent you a message\") ||\n    text.includes(\"new message\") ||\n    text.includes(\"messaged you\") ||\n    text.includes(\"replied to your message\")\n  ) {\n    return \"new_message\";\n  }\n\n  return \"unknown\";\n}\n\n/**\n * Extracts a likely person name from LinkedIn notification text.\n *\n * @param {string} subject - Email subject line.\n * @param {string} body - Plain text or cleaned HTML email body.\n * @returns {string} Extracted person name, or Unknown if unavailable.\n */\nfunction extractPersonName(subject, body) {\n  const candidates = [\n    subject.match(/^(.+?) sent you a message/i),\n    subject.match(/^(.+?) wants to connect/i),\n    subject.match(/^(.+?) accepted your invitation/i),\n    subject.match(/^(.+?) is now a connection/i),\n    body.match(/^(?:Hi\\s+\\w+,\\s*)?([A-Z][A-Za-z.'-]+(?:\\s[A-Z][A-Za-z.'-]+){0,3})\\s*$/m),\n  ];\n\n  for (const match of candidates) {\n    if (match && match[1]) {\n      return cleanText(match[1]);\n    }\n  }\n\n  return \"Unknown\";\n}\n\n/**\n * Extracts role and company from common LinkedIn notification formats.\n *\n * @param {string} body - Plain text or cleaned HTML email body.\n * @returns {{role: string, company: string}} Extracted role and company.\n */\nfunction extractRoleAndCompany(body) {\n  const lines = cleanText(body)\n    .split(\"\\n\")\n    .map((line) => cleanText(line))\n    .filter(Boolean);\n\n  let role = \"Unknown\";\n  let company = \"Unknown\";\n\n  for (const line of lines) {\n    const atMatch = line.match(/^(.+?)\\s+(?:at|@)\\s+(.+)$/i);\n    if (atMatch) {\n      role = cleanText(atMatch[1]);\n      company = cleanText(atMatch[2]);\n      break;\n    }\n\n    const dashMatch = line.match(/^(.+?)\\s+[-|]\\s+(.+)$/i);\n    if (dashMatch && !/linkedin|view profile|message/i.test(line)) {\n      role = cleanText(dashMatch[1]);\n      company = cleanText(dashMatch[2]);\n      break;\n    }\n  }\n\n  return { role, company };\n}\n\n/**\n * Extracts the sender's message content from a LinkedIn notification.\n *\n * @param {string} body - Plain text or cleaned HTML email body.\n * @returns {string} Extracted message content or an empty string.\n */\nfunction extractMessageContent(body) {\n  const cleaned = cleanText(body);\n\n  const curlyQuotedMessage = cleaned.match(/“([^”]+)”/);\n  if (curlyQuotedMessage && curlyQuotedMessage[1]) {\n    return cleanText(curlyQuotedMessage[1]);\n  }\n\n  const straightQuotedMessage = cleaned.match(/\"([^\"]{8,})\"/);\n  if (straightQuotedMessage && straightQuotedMessage[1]) {\n    return cleanText(straightQuotedMessage[1]);\n  }\n\n  const messageAfterLabel = cleaned.match(/message:\\s*([\\s\\S]+?)(?:\\n\\n|View message|Reply|See message)/i);\n  if (messageAfterLabel && messageAfterLabel[1]) {\n    return cleanText(messageAfterLabel[1]);\n  }\n\n  return \"\";\n}\n\n/**\n * Converts a raw Gmail item into a normalized LinkedIn lead event.\n *\n * @param {object} item - n8n input item containing Gmail payload fields.\n * @returns {object} Normalized n8n item containing a LinkedIn lead event.\n */\nfunction parseLinkedInEmail(item) {\n  const json = item.json || {};\n  const subject = cleanText(json.subject || \"\");\n  const body = cleanText(json.textPlain || json.text || json.textHtml || json.html || \"\");\n  const eventType = detectEventType(subject, body);\n  const personName = extractPersonName(subject, body);\n  const profile = extractRoleAndCompany(body);\n  const messageContent = extractMessageContent(body);\n\n  return {\n    json: {\n      eventType,\n      personName,\n      role: profile.role,\n      company: profile.company,\n      messageContent,\n      rawSubject: subject,\n      rawBodyPreview: body.slice(0, 1000),\n      sourceEmailId: json.id || json.messageId || \"\",\n      receivedAt: json.date || new Date().toISOString(),\n      parseStatus: personName === \"Unknown\" ? \"needs_manual_review\" : \"parsed\",\n    },\n  };\n}\n\nreturn items.map(parseLinkedInEmail);"
+      },
+      "id": "code-parse-linkedin-email",
+      "name": "Code: Parse LinkedIn Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -520,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json.eventType}}",
+              "operation": "notEqual",
+              "value2": "unknown"
+            }
+          ]
+        }
+      },
+      "id": "if-supported-event",
+      "name": "IF: Supported Event Type",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [
+        -280,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "/**\n * Detects whether a company is FAANG or broader Big Tech.\n *\n * @param {string} company - Person's extracted company.\n * @returns {{isFaang: boolean, isBigTech: boolean, companyTier: string}} Company tier signals.\n */\nfunction detectCompanyTier(company) {\n  const normalizedCompany = String(company || \"\").toLowerCase();\n  const faangCompanies = [\n    \"meta\",\n    \"facebook\",\n    \"amazon\",\n    \"apple\",\n    \"netflix\",\n    \"google\",\n    \"alphabet\",\n  ];\n  const bigTechCompanies = [\n    ...faangCompanies,\n    \"microsoft\",\n    \"openai\",\n    \"nvidia\",\n    \"tesla\",\n    \"salesforce\",\n    \"oracle\",\n    \"adobe\",\n    \"stripe\",\n    \"airbnb\",\n    \"uber\",\n    \"lyft\",\n    \"linkedin\",\n    \"bytedance\",\n    \"tiktok\",\n    \"shopify\",\n    \"databricks\",\n    \"snowflake\",\n    \"palantir\",\n    \"atlassian\",\n    \"block\",\n    \"square\",\n    \"coinbase\",\n  ];\n\n  const isFaang = faangCompanies.some((name) => normalizedCompany.includes(name));\n  const isBigTech = bigTechCompanies.some((name) => normalizedCompany.includes(name));\n\n  return {\n    isFaang,\n    isBigTech,\n    companyTier: isFaang ? \"faang\" : isBigTech ? \"big_tech\" : \"standard\",\n  };\n}\n\n/**\n * Detects whether the person likely has management or leadership responsibility.\n *\n * @param {string} role - Person's extracted role or headline.\n * @param {string} messageContent - Extracted LinkedIn message content.\n * @returns {boolean} True when the contact likely manages people, strategy, or teams.\n */\nfunction isManagerRole(role, messageContent) {\n  const text = `${role || \"\"} ${messageContent || \"\"}`.toLowerCase();\n\n  return /(manager|director|head of|vp|vice president|chief|cto|cio|cpo|lead|principal|staff|founder|co-founder|owner|partner)/.test(text);\n}\n\n/**\n * Categorizes a LinkedIn contact based on profile and message context.\n *\n * @param {string} role - Person's extracted role or headline.\n * @param {string} company - Person's extracted company.\n * @param {string} messageContent - Extracted LinkedIn message content.\n * @returns {string} Lead category used by the reply prompt.\n */\nfunction categorizePerson(role, company, messageContent) {\n  const text = `${role || \"\"} ${company || \"\"} ${messageContent || \"\"}`.toLowerCase();\n\n  if (/(recruiter|talent|hiring|hr|people|sourcer|staffing|headhunter)/.test(text)) {\n    return \"recruiter_hr\";\n  }\n\n  if (isManagerRole(role, messageContent)) {\n    return \"manager_leader\";\n  }\n\n  if (/(engineer|developer|software|frontend|front-end|backend|back-end|full stack|devops|sre|architect|platform|infra)/.test(text)) {\n    return \"engineer_developer\";\n  }\n\n  if (/(product|pm|data|analytics|analyst|scientist|growth|strategy|ml|ai|business intelligence)/.test(text)) {\n    return \"product_data\";\n  }\n\n  return \"general_connection\";\n}\n\n/**\n * Selects the reply tone that should be passed to the OpenAI prompt.\n *\n * @param {string} category - Classified lead category.\n * @returns {string} Reply tone strategy.\n */\nfunction selectToneStrategy(category) {\n  if (category === \"recruiter_hr\") {\n    return \"professional_opportunity_focused\";\n  }\n\n  if (category === \"engineer_developer\") {\n    return \"networking_curiosity\";\n  }\n\n  if (category === \"manager_leader\") {\n    return \"strategic_impact_focused\";\n  }\n\n  return \"warm_open_ended\";\n}\n\n/**\n * Detects seniority level from role and message context.\n *\n * @param {string} role - Person's extracted role or headline.\n * @param {string} messageContent - Extracted LinkedIn message content.\n * @returns {string} Seniority level used by lead scoring.\n */\nfunction detectSeniority(role, messageContent) {\n  const text = `${role || \"\"} ${messageContent || \"\"}`.toLowerCase();\n\n  if (/(chief|cto|cio|cpo|ceo|coo|cfo|founder|co-founder|vp|vice president|partner)/.test(text)) {\n    return \"executive\";\n  }\n\n  if (/(director|head of|senior manager|group manager|principal|staff)/.test(text)) {\n    return \"senior_leader\";\n  }\n\n  if (/(manager|lead|senior|sr\\.|architect)/.test(text)) {\n    return \"senior\";\n  }\n\n  if (/(intern|junior|jr\\.|associate|entry)/.test(text)) {\n    return \"junior\";\n  }\n\n  return \"mid\";\n}\n\n/**\n * Classifies the likely intent of the LinkedIn message.\n *\n * @param {string} messageContent - Extracted LinkedIn message content.\n * @returns {string} Message intent used by lead scoring.\n */\nfunction detectMessageIntent(messageContent) {\n  const message = String(messageContent || \"\").toLowerCase();\n\n  if (!message.trim()) {\n    return \"empty\";\n  }\n\n  if (/(role|opportunity|opening|position|job|hiring|interview|contract|compensation|salary)/.test(message)) {\n    return \"opportunity\";\n  }\n\n  if (/(refer|referral|recommend|intro|introduce|connect you|team)/.test(message)) {\n    return \"referral_network\";\n  }\n\n  if (/(collaborate|partnership|project|build|consult|advisory|client|customer|demo)/.test(message)) {\n    return \"collaboration\";\n  }\n\n  if (/(connect|network|profile|background|work|curious|chat)/.test(message)) {\n    return \"networking\";\n  }\n\n  if (/(buy|sales|lead generation|outsourcing|agency|service)/.test(message)) {\n    return \"sales_pitch\";\n  }\n\n  return \"general\";\n}\n\n/**\n * Scores a LinkedIn lead using transparent weighted business rules.\n *\n * @param {string} category - Classified lead category.\n * @param {{isFaang: boolean, isBigTech: boolean, companyTier: string}} companyTier - Company tier signals.\n * @param {string} seniority - Detected seniority level.\n * @param {string} messageIntent - Detected message intent.\n * @param {string} messageContent - Extracted LinkedIn message content.\n * @returns {number} Lead score from 0 to 100.\n */\nfunction scoreLead(category, companyTier, seniority, messageIntent, messageContent) {\n  let score = 10;\n  const message = String(messageContent || \"\").trim();\n\n  if (companyTier.isFaang) score += 30;\n  else if (companyTier.isBigTech) score += 22;\n  else score += 8;\n\n  if (category === \"recruiter_hr\") score += 25;\n  else if (category === \"manager_leader\") score += 22;\n  else if (category === \"engineer_developer\") score += 14;\n  else if (category === \"product_data\") score += 12;\n  else score += 6;\n\n  if (seniority === \"executive\") score += 18;\n  else if (seniority === \"senior_leader\") score += 15;\n  else if (seniority === \"senior\") score += 10;\n  else if (seniority === \"mid\") score += 6;\n  else if (seniority === \"junior\") score += 2;\n\n  if (messageIntent === \"opportunity\") score += 20;\n  else if (messageIntent === \"referral_network\") score += 16;\n  else if (messageIntent === \"collaboration\") score += 14;\n  else if (messageIntent === \"networking\") score += 8;\n  else if (messageIntent === \"general\") score += 4;\n  else if (messageIntent === \"empty\") score -= 8;\n  else if (messageIntent === \"sales_pitch\") score -= 15;\n\n  if (message.length > 120) score += 5;\n  else if (message.length > 40) score += 3;\n\n  return Math.max(0, Math.min(score, 100));\n}\n\n/**\n * Converts a numeric lead score into an operational priority bucket.\n *\n * @param {number} score - Lead score from 0 to 100.\n * @returns {string} Priority bucket: high, medium, or low.\n */\nfunction assignPriority(score) {\n  if (score >= 75) {\n    return \"high\";\n  }\n\n  if (score >= 45) {\n    return \"medium\";\n  }\n\n  return \"low\";\n}\n\nreturn items.map((item) => {\n  const category = categorizePerson(item.json.role, item.json.company, item.json.messageContent);\n  const companyTier = detectCompanyTier(item.json.company);\n  const seniority = detectSeniority(item.json.role, item.json.messageContent);\n  const messageIntent = detectMessageIntent(item.json.messageContent);\n  const leadScore = scoreLead(\n    category,\n    companyTier,\n    seniority,\n    messageIntent,\n    item.json.messageContent\n  );\n\n  return {\n    json: {\n      ...item.json,\n      category,\n      toneStrategy: selectToneStrategy(category),\n      seniority,\n      messageIntent,\n      isFaang: companyTier.isFaang,\n      isBigTech: companyTier.isBigTech,\n      companyTier: companyTier.companyTier,\n      leadScore,\n      priority: assignPriority(leadScore),\n    },\n  };\n});\n"
+      },
+      "id": "code-categorize-person",
+      "name": "Code: Categorize Person",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -40,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are helping draft safe, concise LinkedIn replies for manual copy-paste. Never claim facts not present in the input."
+            },
+            {
+              "content": "edIn Reply Prompt\n\nUse this as the OpenAI user prompt in n8n."
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 180,
+          "temperature": 0.6
+        }
+      },
+      "id": "openai-generate-reply",
+      "name": "OpenAI: Generate Reply",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1,
+      "position": [
+        220,
+        -160
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_WITH_OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "/**\n * Resolves the generated OpenAI reply from common n8n OpenAI node shapes.\n *\n * @param {object} data - n8n item JSON after the OpenAI node.\n * @returns {string} Generated reply text, or an empty string when unavailable.\n */\nfunction resolveOpenAIReply(data) {\n  return (\n    data.reply ||\n    data.text ||\n    data.output ||\n    data.message ||\n    data.choices?.[0]?.message?.content ||\n    data.data?.[0]?.content?.[0]?.text ||\n    \"\"\n  ).trim();\n}\n\n/**\n * Formats the Telegram notification for manual LinkedIn reply handling.\n *\n * @param {object} data - Normalized lead and generated reply data.\n * @returns {string} Telegram-ready plain text message.\n */\nfunction formatTelegramMessage(data) {\n  const reply = resolveOpenAIReply(data);\n  const reviewMarker = data.parseStatus === \"needs_manual_review\" ? \"Needs manual review\" : \"Parsed\";\n\n  return [\n    \"LinkedIn Reply Draft\",\n    \"\",\n    `Status: ${reviewMarker}`,\n    `Event: ${data.eventType}`,\n    `Category: ${data.category}`,\n    `Tone: ${data.toneStrategy || \"n/a\"}`,\n    `Company Tier: ${data.companyTier || \"standard\"}`,\n    `FAANG: ${data.isFaang ? \"yes\" : \"no\"}`,\n    `Big Tech: ${data.isBigTech ? \"yes\" : \"no\"}`,\n    `Seniority: ${data.seniority || \"n/a\"}`,\n    `Intent: ${data.messageIntent || \"n/a\"}`,\n    `Score: ${Number.isFinite(data.leadScore) ? data.leadScore : \"n/a\"}/100`,\n    `Priority: ${data.priority || \"n/a\"}`,\n    `Name: ${data.personName}`,\n    `Role: ${data.role}`,\n    `Company: ${data.company}`,\n    \"\",\n    \"Original Message:\",\n    data.messageContent || \"(No message content detected)\",\n    \"\",\n    \"Suggested Reply:\",\n    reply || \"(Reply generation failed. Review manually.)\",\n    \"\",\n    \"Action: Manually copy-paste into LinkedIn. Do not auto-send.\",\n  ].join(\"\\n\");\n}\n\nreturn items.map((item) => {\n  return {\n    json: {\n      ...item.json,\n      openaiReply: resolveOpenAIReply(item.json),\n      telegramMessage: formatTelegramMessage(item.json),\n    },\n  };\n});\n"
+      },
+      "id": "code-format-telegram",
+      "name": "Code: Format Telegram Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "REPLACE_WITH_TELEGRAM_CHAT_ID",
+        "text": "={{$json.telegramMessage}}",
+        "additionalFields": {
+          "parse_mode": "None"
+        }
+      },
+      "id": "telegram-send-message",
+      "name": "Telegram: Send Message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        760,
+        -160
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "REPLACE_WITH_TELEGRAM_CREDENTIAL_ID",
+          "name": "Telegram bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "IF: Is LinkedIn Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Is LinkedIn Notification": {
+      "main": [
+        [
+          {
+            "node": "Code: Parse LinkedIn Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Code: Parse LinkedIn Email": {
+      "main": [
+        [
+          {
+            "node": "IF: Supported Event Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Supported Event Type": {
+      "main": [
+        [
+          {
+            "node": "Code: Categorize Person",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Code: Categorize Person": {
+      "main": [
+        [
+          {
+            "node": "OpenAI: Generate Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI: Generate Reply": {
+      "main": [
+        [
+          {
+            "node": "Code: Format Telegram Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: Format Telegram Message": {
+      "main": [
+        [
+          {
+            "node": "Telegram: Send Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true
+  },
+  "staticData": null,
+  "pinData": {},
+  "versionId": "template",
+  "triggerCount": 1,
+  "tags": [
+    {
+      "name": "linkedin"
+    },
+    {
+      "name": "human-in-the-loop"
+    }
+  ]
+}
