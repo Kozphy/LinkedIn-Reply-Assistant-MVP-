@@ -14,8 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
 lib64/
+!frontend/src/lib/
 parts/
 sdist/
 var/
@@ -205,3 +205,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Career Intelligence CRM
+backend/data/
+node_modules/
+.next/
+frontend/.next/
