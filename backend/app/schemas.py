@@ -1,4 +1,5 @@
-from datetime import date, datetime
+from datetime import date as DateType
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -118,11 +119,11 @@ class JobRead(JobBase):
 
 class InteractionBase(BaseModel):
     contact_id: int
-    date: date
+    date: DateType
     channel: str = Field(..., min_length=1, max_length=100)
     message: str | None = None
     result: str | None = None
-    next_follow_up_date: date | None = None
+    next_follow_up_date: DateType | None = None
 
 
 class InteractionCreate(InteractionBase):
@@ -131,11 +132,11 @@ class InteractionCreate(InteractionBase):
 
 class InteractionUpdate(BaseModel):
     contact_id: int | None = None
-    date: date | None = None
+    date: DateType | None = None
     channel: str | None = Field(None, min_length=1, max_length=100)
     message: str | None = None
     result: str | None = None
-    next_follow_up_date: date | None = None
+    next_follow_up_date: DateType | None = None
 
 
 class InteractionRead(InteractionBase):

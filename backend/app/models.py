@@ -1,5 +1,6 @@
 import enum
-from datetime import date, datetime
+from datetime import date as DateType
+from datetime import datetime
 
 from sqlalchemy import Date, DateTime, Enum, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -125,11 +126,11 @@ class Interaction(Base):
     contact_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("contacts.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    date: Mapped[date] = mapped_column(Date, nullable=False)
+    date: Mapped[DateType] = mapped_column(Date, nullable=False)
     channel: Mapped[str] = mapped_column(String(100), nullable=False)
     message: Mapped[str | None] = mapped_column(Text)
     result: Mapped[str | None] = mapped_column(String(255))
-    next_follow_up_date: Mapped[date | None] = mapped_column(Date)
+    next_follow_up_date: Mapped[DateType | None] = mapped_column(Date)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
