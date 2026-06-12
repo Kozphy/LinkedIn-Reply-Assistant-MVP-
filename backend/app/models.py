@@ -1,11 +1,14 @@
 import enum
-from datetime import date as DateType
-from datetime import datetime
+from datetime import UTC, date as DateType, datetime
 
 from sqlalchemy import Date, DateTime, Enum, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 class ContactSource(str, enum.Enum):
@@ -62,9 +65,9 @@ class Company(Base):
     target_roles: Mapped[str | None] = mapped_column(Text)
     career_value: Mapped[str | None] = mapped_column(String(50))
     notes: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, default=utc_now, onupdate=utc_now
     )
 
 
@@ -87,9 +90,9 @@ class Contact(Base):
         Enum(ContactSource), default=ContactSource.MANUAL
     )
     notes: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, default=utc_now, onupdate=utc_now
     )
 
     interactions: Mapped[list["Interaction"]] = relationship(
@@ -113,9 +116,9 @@ class Job(Base):
     fit_score: Mapped[float | None] = mapped_column(Float)
     missing_skills: Mapped[str | None] = mapped_column(Text)
     next_action: Mapped[str | None] = mapped_column(String(500))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, default=utc_now, onupdate=utc_now
     )
 
 
@@ -131,9 +134,9 @@ class Interaction(Base):
     message: Mapped[str | None] = mapped_column(Text)
     result: Mapped[str | None] = mapped_column(String(255))
     next_follow_up_date: Mapped[DateType | None] = mapped_column(Date)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, default=utc_now, onupdate=utc_now
     )
 
     contact: Mapped["Contact"] = relationship(back_populates="interactions")
@@ -152,9 +155,9 @@ class OutreachMessage(Base):
     status: Mapped[OutreachStatus] = mapped_column(
         Enum(OutreachStatus), default=OutreachStatus.DRAFT
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime, default=utc_now, onupdate=utc_now
     )
 
     contact: Mapped["Contact"] = relationship(back_populates="outreach_messages")
@@ -168,4 +171,4 @@ class AuditLog(Base):
     entity_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     action: Mapped[AuditAction] = mapped_column(Enum(AuditAction), nullable=False)
     details: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
